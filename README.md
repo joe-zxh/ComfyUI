@@ -10,6 +10,7 @@
 
 
 <div align="center">
+
 # ComfyUI
 **The most powerful and modular diffusion model GUI and backend.**
 
