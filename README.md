@@ -1,7 +1,6 @@
 
 # ComfyUI代码注释版
 
-* About
 ComfyUI代码注释版，对应b站视频：https://www.bilibili.com/video/BV1nY6xYmEcP
 * 注释版代码基于ComfyUI v0.3.6
 * B站视频对应的讲义放在docs_azou目录下
