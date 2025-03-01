@@ -633,7 +633,7 @@ class LoraLoader:
     CATEGORY = "loaders"
     DESCRIPTION = "LoRAs are used to modify diffusion and CLIP models, altering the way in which latents are denoised such as applying styles. Multiple LoRA nodes can be linked together."
 
-    def load_lora(self, model, clip, lora_name, strength_model, strength_clip):
+    def load_lora(self, model: comfy.model_patcher.ModelPatcher, clip, lora_name, strength_model, strength_clip):
         if strength_model == 0 and strength_clip == 0:
             return (model, clip)
 
@@ -642,7 +642,7 @@ class LoraLoader:
         if self.loaded_lora is not None:
             if self.loaded_lora[0] == lora_path:
                 lora = self.loaded_lora[1]
-            else:
+            else: # 把旧的lora删掉
                 temp = self.loaded_lora
                 self.loaded_lora = None
                 del temp
@@ -1627,6 +1627,7 @@ class LoadImage:
 
     @classmethod
     def IS_CHANGED(s, image):
+        return str(random.randint(0, 10000000000))
         image_path = folder_paths.get_annotated_filepath(image)
         m = hashlib.sha256()
         with open(image_path, 'rb') as f:
@@ -2042,7 +2043,7 @@ def load_custom_node(module_path: str, ignore=set(), module_parent="custom_nodes
 
         if hasattr(module, "NODE_CLASS_MAPPINGS") and getattr(module, "NODE_CLASS_MAPPINGS") is not None:
             for name, node_cls in module.NODE_CLASS_MAPPINGS.items():
-                if name not in ignore:
+                if name not in ignore: # 如果ignore集合里面的对象类已经加载过了，那么就会跳过
                     NODE_CLASS_MAPPINGS[name] = node_cls
                     node_cls.RELATIVE_PYTHON_MODULE = "{}.{}".format(module_parent, get_module_name(module_path))
             if hasattr(module, "NODE_DISPLAY_NAME_MAPPINGS") and getattr(module, "NODE_DISPLAY_NAME_MAPPINGS") is not None:
@@ -2073,6 +2074,8 @@ def init_external_custom_nodes():
         possible_modules = os.listdir(os.path.realpath(custom_node_path))
         if "__pycache__" in possible_modules:
             possible_modules.remove("__pycache__")
+
+        # possible_modules = ["zxh", "ComfyUI_Fill-Nodes"]
 
         for possible_module in possible_modules:
             module_path = os.path.join(custom_node_path, possible_module)

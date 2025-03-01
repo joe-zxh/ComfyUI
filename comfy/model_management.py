@@ -23,6 +23,13 @@ from comfy.cli_args import args
 import torch
 import sys
 import platform
+from typing import List
+from typing import TYPE_CHECKING
+import gc
+# import objgraph
+
+if TYPE_CHECKING:
+    from comfy.model_patcher import ModelPatcher
 
 class VRAMState(Enum):
     DISABLED = 0    #No vram present: no need to move models to vram
@@ -141,7 +148,7 @@ def get_total_memory(dev=None, torch_total_too=False):
         return mem_total
 
 total_vram = get_total_memory(get_torch_device()) / (1024 * 1024)
-total_ram = psutil.virtual_memory().total / (1024 * 1024)
+total_ram = psutil.virtual_memory().total / (1024 * 1024) # ram是内存；vram是显存
 logging.info("Total VRAM {:0.0f} MB, total RAM {:0.0f} MB".format(total_vram, total_ram))
 
 try:
@@ -274,10 +281,8 @@ try:
 except:
     logging.warning("Could not pick default device.")
 
-
-current_loaded_models = []
-
-def module_size(module):
+# 获得一个nn.Module占用的空间大小
+def module_size(module: torch.nn.Module):
     module_mem = 0
     sd = module.state_dict()
     for k in sd:
@@ -286,25 +291,28 @@ def module_size(module):
     return module_mem
 
 class LoadedModel:
-    def __init__(self, model):
+    def __init__(self, model: 'ModelPatcher'):
         self.model = model
         self.device = model.load_device
         self.weights_loaded = False
-        self.real_model = None
+        self.real_model = None # 打完补丁后实际权重的模型
         self.currently_used = True
 
     def model_memory(self):
         return self.model.model_size()
 
+    # 未加载的模型的大小
     def model_offloaded_memory(self):
         return self.model.model_size() - self.model.loaded_size()
 
+    # 加载模型仍需要的大小
     def model_memory_required(self, device):
         if device == self.model.current_loaded_device():
             return self.model_offloaded_memory()
         else:
             return self.model_memory()
 
+    # 加载模型到self.device中
     def model_load(self, lowvram_model_memory=0, force_patch_weights=False):
         patch_model_to = self.device
 
@@ -338,6 +346,7 @@ class LoadedModel:
             return True
         return False
 
+    # 把模型从self.device转回self.model.offload_device上
     def model_unload(self, memory_to_free=None, unpatch_weights=True):
         if memory_to_free is not None:
             if memory_to_free < self.model.loaded_size():
@@ -356,14 +365,18 @@ class LoadedModel:
     def __eq__(self, other):
         return self.model is other.model
 
-def use_more_memory(extra_memory, loaded_models, device):
+current_loaded_models : List[LoadedModel] = [] # 存放加载到GPU的模型，每个元素是一个LoadedModel对象
+
+# 尽量榨干extra_memory来加载模型
+def use_more_memory(extra_memory, loaded_models: List[LoadedModel], device):
     for m in loaded_models:
         if m.device == device:
             extra_memory -= m.model_use_more_vram(extra_memory)
             if extra_memory <= 0:
                 break
 
-def offloaded_memory(loaded_models, device):
+# 计算所有还未加载到目标设备device上的空间大小
+def offloaded_memory(loaded_models: List[LoadedModel], device):
     offloaded_mem = 0
     for m in loaded_models:
         if m.device == device:
@@ -386,11 +399,12 @@ def extra_reserved_memory():
 def minimum_inference_memory():
     return (1024 * 1024 * 1024) * 0.8 + extra_reserved_memory()
 
-def unload_model_clones(model, unload_weights_only=True, force_unload=True):
+# 共用同一个ModelPatcher的LoadedModel只需要load一次，所以需要unload其他LoadedModel
+def unload_model_clones(model: "ModelPatcher", unload_weights_only=True, force_unload=True):
     to_unload = []
     for i in range(len(current_loaded_models)):
         if model.is_clone(current_loaded_models[i].model):
-            to_unload = [i] + to_unload
+            to_unload = [i] + to_unload # 注意这个顺序，从后往前unload，这样就能恢复到最原始的unet权重
 
     if len(to_unload) == 0:
         return True
@@ -413,10 +427,15 @@ def unload_model_clones(model, unload_weights_only=True, force_unload=True):
 
     for i in to_unload:
         logging.debug("unload clone {} {}".format(i, unload_weight))
-        current_loaded_models.pop(i).model_unload(unpatch_weights=unload_weight)
+        pop_m = current_loaded_models.pop(i)
+        # objgraph.show_refs()
+        c = sys.getrefcount(pop_m)
+        pop_m.model_unload(unpatch_weights=unload_weight) # zxhtodo: 看看引用数量是否为1
+        a = 1
 
     return unload_weight
 
+ # 指定需要的存储空间，如果不够，那么清理当前已加载的模型
 def free_memory(memory_required, device, keep_loaded=[]):
     unloaded_model = []
     can_unload = []
@@ -453,6 +472,9 @@ def free_memory(memory_required, device, keep_loaded=[]):
                 soft_empty_cache()
     return unloaded_models
 
+# 核心方法：把模型加载到gpu
+# memory_required: 正常情况下所需要的空间大小
+# minimum_memory_required: 最小需要空间大小
 def load_models_gpu(models, memory_required=0, force_patch_weights=False, minimum_memory_required=None, force_full_load=False):
     global vram_state
 
@@ -465,8 +487,8 @@ def load_models_gpu(models, memory_required=0, force_patch_weights=False, minimu
 
     models = set(models)
 
-    models_to_load = []
-    models_already_loaded = []
+    models_to_load : List[LoadedModel] = []
+    models_already_loaded : List[LoadedModel] = []
     for x in models:
         loaded_model = LoadedModel(x)
         loaded = None
@@ -507,7 +529,7 @@ def load_models_gpu(models, memory_required=0, force_patch_weights=False, minimu
 
     logging.info(f"Loading {len(models_to_load)} new model{'s' if len(models_to_load) > 1 else ''}")
 
-    total_memory_required = {}
+    total_memory_required = {} # key: device, value: 所需要的空间大小
     for loaded_model in models_to_load:
         unload_model_clones(loaded_model.model, unload_weights_only=True, force_unload=False) #unload clones where the weights are different
         total_memory_required[loaded_model.device] = total_memory_required.get(loaded_model.device, 0) + loaded_model.model_memory_required(loaded_model.device)
@@ -522,7 +544,7 @@ def load_models_gpu(models, memory_required=0, force_patch_weights=False, minimu
 
     for device in total_memory_required:
         if device != torch.device("cpu"):
-            free_memory(total_memory_required[device] * 1.1 + extra_mem, device, models_already_loaded)
+            free_memory(total_memory_required[device] * 1.1 + extra_mem, device, models_already_loaded) # 根据需要释放空间
 
     for loaded_model in models_to_load:
         model = loaded_model.model
@@ -542,7 +564,7 @@ def load_models_gpu(models, memory_required=0, force_patch_weights=False, minimu
         if vram_set_state == VRAMState.NO_VRAM:
             lowvram_model_memory = 64 * 1024 * 1024
 
-        cur_loaded_model = loaded_model.model_load(lowvram_model_memory, force_patch_weights=force_patch_weights)
+        cur_loaded_model = loaded_model.model_load(lowvram_model_memory, force_patch_weights=force_patch_weights) # 真正的加载
         current_loaded_models.insert(0, loaded_model)
 
 

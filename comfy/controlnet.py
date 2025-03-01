@@ -595,7 +595,7 @@ def load_controlnet_state_dict(state_dict, model=None, model_options={}):
 
         count = 0
         loop = True
-        while loop:
+        while loop: # 这里2个while loop用来添加普通cn和diffusers cn之间的key映射关系
             suffix = [".weight", ".bias"]
             for s in suffix:
                 k_in = "controlnet_down_blocks.{}{}".format(count, s)

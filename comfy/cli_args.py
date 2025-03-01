@@ -98,7 +98,7 @@ parser.add_argument("--preview-size", type=int, default=512, help="Sets the maxi
 
 cache_group = parser.add_mutually_exclusive_group()
 cache_group.add_argument("--cache-classic", action="store_true", help="Use the old style (aggressive) caching.")
-cache_group.add_argument("--cache-lru", type=int, default=0, help="Use LRU caching with a maximum of N node results cached. May use more RAM/VRAM.")
+cache_group.add_argument("--cache-lru", type=int, default=0, help="Use LRU caching with a maximum of N node results cached. May use more RAM/VRAM.") # 其实也可以把这里调大一点，缓存更多的节点
 
 attn_group = parser.add_mutually_exclusive_group()
 attn_group.add_argument("--use-split-cross-attention", action="store_true", help="Use the split cross attention optimization. Ignored when xformers is used.")

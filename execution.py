@@ -17,6 +17,7 @@ from comfy_execution.graph import get_input_info, ExecutionList, DynamicPrompt, 
 from comfy_execution.graph_utils import is_link, GraphBuilder
 from comfy_execution.caching import HierarchicalCache, LRUCache, CacheKeySetInputSignature, CacheKeySetID
 from comfy.cli_args import args
+import server
 
 class ExecutionResult(Enum):
     SUCCESS = 0
@@ -26,8 +27,9 @@ class ExecutionResult(Enum):
 class DuplicateNodeError(Exception):
     pass
 
+# 存放的不是bool值，而是对应的一个要用来比较是否变化的值，比如哈希。是通过节点定义的IS_CHANGED来计算的，如果这个节点没有IS_CHANGED函数，那么返回False..
 class IsChangedCache:
-    def __init__(self, dynprompt, outputs_cache):
+    def __init__(self, dynprompt, outputs_cache: HierarchicalCache):
         self.dynprompt = dynprompt
         self.outputs_cache = outputs_cache
         self.is_changed = {}
@@ -69,10 +71,10 @@ class CacheSet:
 
     # Useful for those with ample RAM/VRAM -- allows experimenting without
     # blowing away the cache every time
-    def init_lru_cache(self, cache_size):
-        self.outputs = LRUCache(CacheKeySetInputSignature, max_size=cache_size)
-        self.ui = LRUCache(CacheKeySetInputSignature, max_size=cache_size)
-        self.objects = HierarchicalCache(CacheKeySetID)
+    # def init_lru_cache(self, cache_size):
+    #     self.outputs = LRUCache(CacheKeySetInputSignature, max_size=cache_size)
+    #     self.ui = LRUCache(CacheKeySetInputSignature, max_size=cache_size)
+    #     self.objects = HierarchicalCache(CacheKeySetID)
 
     # Performs like the old cache -- dump data ASAP
     def init_classic_cache(self):
@@ -130,6 +132,7 @@ def get_input_data(inputs, class_def, unique_id, outputs=None, dynprompt=None, e
 
 map_node_over_list = None #Don't hook this please
 
+# 执行obj的func函数，并返回结果。execution_block_cb和pre_execute_cb是2个和前端相关的回调函数，可以显示进度或者指定到什么节点之类的，可以不管
 def _map_node_over_list(obj, input_data_all, func, allow_interrupt=False, execution_block_cb=None, pre_execute_cb=None):
     # check if node wants the lists
     input_is_list = getattr(obj, "INPUT_IS_LIST", False)
@@ -155,7 +158,7 @@ def _map_node_over_list(obj, input_data_all, func, allow_interrupt=False, execut
         if execution_block is None:
             if pre_execute_cb is not None and index is not None:
                 pre_execute_cb(index)
-            results.append(getattr(obj, func)(**inputs))
+            results.append(getattr(obj, func)(**inputs)) # 执行
         else:
             results.append(execution_block)
 
@@ -241,7 +244,8 @@ def format_value(x):
     else:
         return str(x)
 
-def execute(server, dynprompt, caches, current_item, extra_data, executed, prompt_id, execution_list, pending_subgraph_results):
+# subgraph可能是for循环那些？
+def execute(server, dynprompt: DynamicPrompt, caches: CacheSet, current_item, extra_data, executed, prompt_id, execution_list, pending_subgraph_results):
     unique_id = current_item
     real_node_id = dynprompt.get_real_node_id(unique_id)
     display_node_id = dynprompt.get_display_node_id(unique_id)
@@ -249,11 +253,11 @@ def execute(server, dynprompt, caches, current_item, extra_data, executed, promp
     inputs = dynprompt.get_node(unique_id)['inputs']
     class_type = dynprompt.get_node(unique_id)['class_type']
     class_def = nodes.NODE_CLASS_MAPPINGS[class_type]
-    if caches.outputs.get(unique_id) is not None:
-        if server.client_id is not None:
-            cached_output = caches.ui.get(unique_id) or {}
-            server.send_sync("executed", { "node": unique_id, "display_node": display_node_id, "output": cached_output.get("output",None), "prompt_id": prompt_id }, server.client_id)
-        return (ExecutionResult.SUCCESS, None, None)
+    # if caches.outputs.get(unique_id) is not None:
+    #     if server.client_id is not None:
+    #         cached_output = caches.ui.get(unique_id) or {}
+    #         server.send_sync("executed", { "node": unique_id, "display_node": display_node_id, "output": cached_output.get("output",None), "prompt_id": prompt_id }, server.client_id)
+    #     return (ExecutionResult.SUCCESS, None, None)
 
     input_data_all = None
     try:
@@ -286,8 +290,10 @@ def execute(server, dynprompt, caches, current_item, extra_data, executed, promp
 
             obj = caches.objects.get(unique_id)
             if obj is None:
-                obj = class_def()
+                obj = class_def() # 所有节点对象创建的时候都是没有参数的，所以只要class_name一样，那么这个对象一定一样，所以objects对应的cachekeyset直接用CacheKeySetID就可以了。
                 caches.objects.set(unique_id, obj)
+            else:
+                a = 1
 
             if hasattr(obj, "check_lazy_status"):
                 required_inputs = _map_node_over_list(obj, input_data_all, "check_lazy_status", allow_interrupt=True)
@@ -320,7 +326,7 @@ def execute(server, dynprompt, caches, current_item, extra_data, executed, promp
                     return block
             def pre_execute_cb(call_index):
                 GraphBuilder.set_default_prefix(unique_id, call_index, 0)
-            output_data, output_ui, has_subgraph = get_output_data(obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb)
+            output_data, output_ui, has_subgraph = get_output_data(obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb) # 执行并获得结果
         if len(output_ui) > 0:
             caches.ui.set(unique_id, {
                 "meta": {
@@ -335,7 +341,7 @@ def execute(server, dynprompt, caches, current_item, extra_data, executed, promp
                 server.send_sync("executed", { "node": unique_id, "display_node": display_node_id, "output": output_ui, "prompt_id": prompt_id }, server.client_id)
         if has_subgraph:
             cached_outputs = []
-            new_node_ids = []
+            new_node_ids = [] # 这里应该是新生成的可以被执行的子节点？
             new_output_ids = []
             new_output_links = []
             for i in range(len(output_data)):
@@ -370,7 +376,7 @@ def execute(server, dynprompt, caches, current_item, extra_data, executed, promp
                 execution_list.add_strong_link(link[0], link[1], unique_id)
             pending_subgraph_results[unique_id] = cached_outputs
             return (ExecutionResult.PENDING, None, None)
-        caches.outputs.set(unique_id, output_data)
+        caches.outputs.set(unique_id, output_data) # 设置输出的缓存
     except comfy.model_management.InterruptProcessingException as iex:
         logging.info("Processing interrupted")
 
@@ -410,9 +416,9 @@ def execute(server, dynprompt, caches, current_item, extra_data, executed, promp
     return (ExecutionResult.SUCCESS, None, None)
 
 class PromptExecutor:
-    def __init__(self, server, lru_size=None):
+    def __init__(self, server: server.PromptServer, lru_size=None):
         self.lru_size = lru_size
-        self.server = server
+        self.server = server # 和前端交互的桥梁
         self.reset()
 
     def reset(self):
@@ -457,6 +463,7 @@ class PromptExecutor:
             }
             self.add_message("execution_error", mes, broadcast=False)
 
+    # prompt: json字典构成的一个计算图graph; prompt_id: 和前端交互的任务id; extra_data: 保存到png图片时，另外存的一些额外信息，这些信息可以用来复现工作流的; execute_outputs: 需要计算的输出节点
     def execute(self, prompt, prompt_id, extra_data={}, execute_outputs=[]):
         nodes.interrupt_processing(False)
 
@@ -468,12 +475,16 @@ class PromptExecutor:
         self.status_messages = []
         self.add_message("execution_start", { "prompt_id": prompt_id}, broadcast=False)
 
+        # file_path = f'执行顺序_{time.strftime("%Y%m%d_%H%M%S", time.localtime())}.txt'
+        # file = open(file_path, "w", encoding="utf-8")
+
         with torch.inference_mode():
             dynamic_prompt = DynamicPrompt(prompt)
             is_changed_cache = IsChangedCache(dynamic_prompt, self.caches.outputs)
             for cache in self.caches.all:
-                cache.set_prompt(dynamic_prompt, prompt.keys(), is_changed_cache)
-                cache.clean_unused()
+                cache : HierarchicalCache = cache
+                cache.set_prompt(dynamic_prompt, prompt.keys(), is_changed_cache) # 用这次任务的prompt对cache_key_set做了初始化
+                cache.clean_unused() # 清除缓存。比如，上一次请求里面用到了，但这次请求里面没有用到的节点对象，就会被清除掉。
 
             cached_nodes = []
             for node_id in prompt:
@@ -489,15 +500,17 @@ class PromptExecutor:
             execution_list = ExecutionList(dynamic_prompt, self.caches.outputs)
             current_outputs = self.caches.outputs.all_node_ids()
             for node_id in list(execute_outputs):
-                execution_list.add_node(node_id)
+                execution_list.add_node(node_id) # add_node会构建计算图，得到节点的执行顺序
 
             while not execution_list.is_empty():
-                node_id, error, ex = execution_list.stage_node_execution()
+                node_id, error, ex = execution_list.stage_node_execution() # 获得一个可以开始执行的节点
+                # file.write(f"node_id: {node_id}\n")
+                # file.flush()
                 if error is not None:
                     self.handle_execution_error(prompt_id, dynamic_prompt.original_prompt, current_outputs, executed, error, ex)
                     break
 
-                result, error, ex = execute(self.server, dynamic_prompt, self.caches, node_id, extra_data, executed, prompt_id, execution_list, pending_subgraph_results)
+                result, error, ex = execute(self.server, dynamic_prompt, self.caches, node_id, extra_data, executed, prompt_id, execution_list, pending_subgraph_results) # 执行这个节点。result是执行的状态，执行成功的话，结果是放到self.caches.outputs中的
                 self.success = result != ExecutionResult.FAILURE
                 if result == ExecutionResult.FAILURE:
                     self.handle_execution_error(prompt_id, dynamic_prompt.original_prompt, current_outputs, executed, error, ex)
@@ -865,6 +878,7 @@ def validate_prompt(prompt):
 
 MAXIMUM_HISTORY_SIZE = 10000
 
+# 就简单理解为是线程安全的任务队列就好了
 class PromptQueue:
     def __init__(self, server):
         self.server = server

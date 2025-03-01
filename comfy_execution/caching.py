@@ -5,21 +5,31 @@ from comfy_execution.graph import DynamicPrompt
 import nodes
 
 from comfy_execution.graph_utils import is_link
+from typing import Union
 
 NODE_CLASS_CONTAINS_UNIQUE_ID: Dict[str, bool] = {}
 
-
+# 注释: 这个函数用于检查节点类是否要把unique_id放到cachekeyset里面
+# 参数: class_type: str - 节点类的名称
+# 返回值: bool - 如果节点类包含唯一的ID，则返回True，否则返回False
+# 作用: 这个函数用于检查节点类是否包含唯一的ID，以便在缓存时使用
 def include_unique_id_in_input(class_type: str) -> bool:
-    if class_type in NODE_CLASS_CONTAINS_UNIQUE_ID:
+    if class_type in NODE_CLASS_CONTAINS_UNIQUE_ID: # 如果节点类已经在字典中，直接返回对应的值
         return NODE_CLASS_CONTAINS_UNIQUE_ID[class_type]
-    class_def = nodes.NODE_CLASS_MAPPINGS[class_type]
+    class_def = nodes.NODE_CLASS_MAPPINGS[class_type] # 获取节点类的定义
     NODE_CLASS_CONTAINS_UNIQUE_ID[class_type] = "UNIQUE_ID" in class_def.INPUT_TYPES().get("hidden", {}).values()
-    return NODE_CLASS_CONTAINS_UNIQUE_ID[class_type]
+    # 如果节点类的输入类型中包含"UNIQUE_ID"，则将字典中对应的值设为True，否则设为False
+    return NODE_CLASS_CONTAINS_UNIQUE_ID[class_type] # 返回字典中对应的值
 
+# CacheKeySet类用来存放key的cache。ComfyUI的DAG流程里面有各种各样的字典，它的key可以通过CacheKeySet找到。
+# cache_key_set = CacheKeySet(dynprompt, node_ids, is_changed_cache)
+# siganature_dag_dict = {"def fff(a, b)": "123"}
+# cache_key_set.add_keys(node_id=123, "def fff(a, b)")
+# sign_val = siganature_dag_dict[cache_key_set.get_key(node_id=123)]
 class CacheKeySet:
     def __init__(self, dynprompt, node_ids, is_changed_cache):
-        self.keys = {}
-        self.subcache_keys = {}
+        self.keys = {} # 这个字典的key是node_id，value是实际cache里面的key，用来做索引的
+        self.subcache_keys = {} # 存的是subgraph的key
 
     def add_keys(self, node_ids):
         raise NotImplementedError()
@@ -56,8 +66,9 @@ def to_hashable(obj):
         # TODO - Support other objects like tensors?
         return Unhashable()
 
+# 记录的key是: (node_id, node["class_type"])
 class CacheKeySetID(CacheKeySet):
-    def __init__(self, dynprompt, node_ids, is_changed_cache):
+    def __init__(self, dynprompt: DynamicPrompt, node_ids, is_changed_cache):
         super().__init__(dynprompt, node_ids, is_changed_cache)
         self.dynprompt = dynprompt
         self.add_keys(node_ids)
@@ -72,6 +83,7 @@ class CacheKeySetID(CacheKeySet):
             self.keys[node_id] = (node_id, node["class_type"])
             self.subcache_keys[node_id] = (node_id, node["class_type"])
 
+# signature: 包含node的is_change、输入的内容；父节点的is_change、输入的内容等等。
 class CacheKeySetInputSignature(CacheKeySet):
     def __init__(self, dynprompt, node_ids, is_changed_cache):
         super().__init__(dynprompt, node_ids, is_changed_cache)
@@ -122,13 +134,15 @@ class CacheKeySetInputSignature(CacheKeySet):
 
     # This function returns a list of all ancestors of the given node. The order of the list is
     # deterministic based on which specific inputs the ancestor is connected by.
+    # 返回ancestors: 所有的父节点，以及递归的父节点的父节点。深度优先的策略
+    # order_mapping是一个dict: key是父节点id，value是父节点在ancestors中的索引
     def get_ordered_ancestry(self, dynprompt, node_id):
         ancestors = []
         order_mapping = {}
         self.get_ordered_ancestry_internal(dynprompt, node_id, ancestors, order_mapping)
         return ancestors, order_mapping
 
-    def get_ordered_ancestry_internal(self, dynprompt, node_id, ancestors, order_mapping):
+    def get_ordered_ancestry_internal(self, dynprompt: DynamicPrompt, node_id, ancestors, order_mapping):
         if not dynprompt.has_node(node_id):
             return
         inputs = dynprompt.get_node(node_id)["inputs"]
@@ -142,14 +156,15 @@ class CacheKeySetInputSignature(CacheKeySet):
                     self.get_ordered_ancestry_internal(dynprompt, ancestor_id, ancestors, order_mapping)
 
 class BasicCache:
-    def __init__(self, key_class):
+    def __init__(self, key_class: Union[CacheKeySetID, CacheKeySetInputSignature]):
         self.key_class = key_class
         self.initialized = False
         self.dynprompt: DynamicPrompt
-        self.cache_key_set: CacheKeySet
-        self.cache = {}
-        self.subcaches = {}
+        self.cache_key_set: CacheKeySet # 这个是每次执行prompt都会新创建的
+        self.cache = {} # 这个是真正的缓存，缓存之前的内容, key是self.cache_key_set[node_id], value: 内容。内容可以是 节点对象(objects)、ui(uis)、节点的输出(outputs)
+        self.subcaches = {} # 这个是缓存subgraph子节点的结果
 
+    # 初始化了cache_key_set出来，并把所有节点对应的signature作为value设置进去了
     def set_prompt(self, dynprompt, node_ids, is_changed_cache):
         self.dynprompt = dynprompt
         self.cache_key_set = self.key_class(dynprompt, node_ids, is_changed_cache)
@@ -201,6 +216,7 @@ class BasicCache:
         else:
             return None
 
+    # 好像没有用到？
     def _ensure_subcache(self, node_id, children_ids):
         subcache_key = self.cache_key_set.get_subcache_key(node_id)
         subcache = self.subcaches.get(subcache_key, None)
@@ -227,7 +243,7 @@ class BasicCache:
         return result
 
 class HierarchicalCache(BasicCache):
-    def __init__(self, key_class):
+    def __init__(self, key_class: Union[CacheKeySetID, CacheKeySetInputSignature]):
         super().__init__(key_class)
 
     def _get_cache_for(self, node_id):
@@ -235,6 +251,8 @@ class HierarchicalCache(BasicCache):
         parent_id = self.dynprompt.get_parent_node_id(node_id)
         if parent_id is None:
             return self
+        
+        # assert False, f"好像不会进入这里？"
 
         hierarchy = []
         while parent_id is not None:
@@ -259,6 +277,7 @@ class HierarchicalCache(BasicCache):
         assert cache is not None
         cache._set_immediate(node_id, value)
 
+    # 好像没有用到？
     def ensure_subcache_for(self, node_id, children_ids):
         cache = self._get_cache_for(node_id)
         assert cache is not None

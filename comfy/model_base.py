@@ -80,7 +80,7 @@ def model_sampling(model_config, model_type):
         c = comfy.model_sampling.CONST
         s = comfy.model_sampling.ModelSamplingFlux
 
-    class ModelSampling(s, c):
+    class ModelSampling(s, c): # 这个操作有点秀，相当于定义了一个新的类，继承自两个类
         pass
 
     return ModelSampling(model_config)
@@ -131,7 +131,7 @@ class BaseModel(torch.nn.Module):
         if self.manual_cast_dtype is not None:
             dtype = self.manual_cast_dtype
 
-        xc = xc.to(dtype)
+        xc = xc.to(dtype) # 这里就是所谓的manual cast了如果manual_cast_dtype不为None，则将xc转换为manual_cast_dtype
         t = self.model_sampling.timestep(t).float()
         context = context.to(dtype)
         extra_conds = {}
@@ -143,12 +143,12 @@ class BaseModel(torch.nn.Module):
             extra_conds[o] = extra
 
         model_output = self.diffusion_model(xc, t, context=context, control=control, transformer_options=transformer_options, **extra_conds).float()
-        return self.model_sampling.calculate_denoised(sigma, model_output, x)
+        return self.model_sampling.calculate_denoised(sigma, model_output, x) # 这里如果预测的是噪声，那么要用x_t - noise = 干净的图片
 
     def get_dtype(self):
         return self.diffusion_model.dtype
 
-    def is_adm(self):
+    def is_adm(self): # 应该指的是《Diffusion Models Beat GANs on Image Synthesis》里面的ablated diffusion model
         return self.adm_channels > 0
 
     def encode_adm(self, **kwargs):
@@ -370,7 +370,7 @@ class SDXL(BaseModel):
         self.noise_augmentor = CLIPEmbeddingNoiseAugmentation(**{"noise_schedule_config": {"timesteps": 1000, "beta_schedule": "squaredcos_cap_v2"}, "timestep_dim": 1280})
 
     def encode_adm(self, **kwargs):
-        clip_pooled = sdxl_pooled(kwargs, self.noise_augmentor)
+        clip_pooled = sdxl_pooled(kwargs, self.noise_augmentor) # 这是啥？
         width = kwargs.get("width", 768)
         height = kwargs.get("height", 768)
         crop_w = kwargs.get("crop_w", 0)

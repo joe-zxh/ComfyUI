@@ -145,7 +145,7 @@ def calc_cond_batch(model, conds, x_in, timestep, model_options):
 
     for i in range(len(conds)):
         out_conds.append(torch.zeros_like(x_in))
-        out_counts.append(torch.ones_like(x_in) * 1e-37)
+        out_counts.append(torch.ones_like(x_in) * 1e-37) # 基本上就是0，但是因为后面要做除法，所以是一个很小的数
 
         cond = conds[i]
         if cond is not None:
@@ -225,7 +225,7 @@ def calc_cond_batch(model, conds, x_in, timestep, model_options):
         if 'model_function_wrapper' in model_options:
             output = model_options['model_function_wrapper'](model.apply_model, {"input": input_x, "timestep": timestep_, "c": c, "cond_or_uncond": cond_or_uncond}).chunk(batch_chunks)
         else:
-            output = model.apply_model(input_x, timestep_, **c).chunk(batch_chunks)
+            output = model.apply_model(input_x, timestep_, **c).chunk(batch_chunks) # todo: 断点
 
         for o in range(batch_chunks):
             cond_index = cond_or_uncond[o]
@@ -276,7 +276,7 @@ def sampling_function(model, x, timestep, uncond, cond, cond_scale, model_option
         uncond_ = uncond
 
     conds = [cond, uncond_]
-    out = calc_cond_batch(model, conds, x, timestep, model_options)
+    out = calc_cond_batch(model, conds, x, timestep, model_options) # o_pos, o_neg; output = o_neg + (o_pos - o_neg) * cond_scale
 
     for fn in model_options.get("sampler_pre_cfg_function", []):
         args = {"conds":conds, "conds_out": out, "cond_scale": cond_scale, "timestep": timestep,
@@ -327,6 +327,7 @@ def ddim_scheduler(model_sampling, steps):
     sigs = sigs[::-1]
     return torch.FloatTensor(sigs)
 
+# 在最大的timestep和最小的timestep上面做个线性插值
 def normal_scheduler(model_sampling, steps, sgm=False, floor=False):
     s = model_sampling
     start = s.timestep(s.sigma_max)
@@ -614,7 +615,7 @@ class KSAMPLER(Sampler):
         else:
             model_k.noise = noise
 
-        noise = model_wrap.inner_model.model_sampling.noise_scaling(sigmas[0], noise, latent_image, self.max_denoise(model_wrap, sigmas))
+        noise = model_wrap.inner_model.model_sampling.noise_scaling(sigmas[0], noise, latent_image, self.max_denoise(model_wrap, sigmas)) # TODO: 这个是什么？
 
         k_callback = None
         total_steps = len(sigmas) - 1
@@ -727,7 +728,7 @@ class CFGGuider:
         for k in self.original_conds:
             self.conds[k] = list(map(lambda a: a.copy(), self.original_conds[k]))
 
-        self.inner_model, self.conds, self.loaded_models = comfy.sampler_helpers.prepare_sampling(self.model_patcher, noise.shape, self.conds)
+        self.inner_model, self.conds, self.loaded_models = comfy.sampler_helpers.prepare_sampling(self.model_patcher, noise.shape, self.conds) # 如果有额外的网络，比如controlnet，需要在这里加载一下。
         device = self.model_patcher.load_device
 
         if denoise_mask is not None:
@@ -828,9 +829,9 @@ class KSampler:
             if denoise <= 0.0:
                 self.sigmas = torch.FloatTensor([])
             else:
-                new_steps = int(steps/denoise)
+                new_steps = int(steps/denoise) # 这个策略和webui那边不一样
                 sigmas = self.calculate_sigmas(new_steps).to(self.device)
-                self.sigmas = sigmas[-(steps + 1):]
+                self.sigmas = sigmas[-(steps + 1):] # 只需要最后的steps个sigma
 
     def sample(self, noise, positive, negative, cfg, latent_image=None, start_step=None, last_step=None, force_full_denoise=False, denoise_mask=None, sigmas=None, callback=None, disable_pbar=False, seed=None):
         if sigmas is None:

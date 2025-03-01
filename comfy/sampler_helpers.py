@@ -56,10 +56,10 @@ def cleanup_additional_models(models):
 def prepare_sampling(model, noise_shape, conds):
     device = model.load_device
     real_model = None
-    models, inference_memory = get_additional_models(conds, model.model_dtype())
-    memory_required = model.memory_required([noise_shape[0] * 2] + list(noise_shape[1:])) + inference_memory
-    minimum_memory_required = model.memory_required([noise_shape[0]] + list(noise_shape[1:])) + inference_memory
-    comfy.model_management.load_models_gpu([model] + models, memory_required=memory_required, minimum_memory_required=minimum_memory_required)
+    models, inference_memory = get_additional_models(conds, model.model_dtype()) # 有可能会有controlnet
+    memory_required = model.memory_required([noise_shape[0] * 2] + list(noise_shape[1:])) + inference_memory # 正常来说是pos 和 neg一起推理，所以这里batchsize设为2
+    minimum_memory_required = model.memory_required([noise_shape[0]] + list(noise_shape[1:])) + inference_memory # 但如果显存不够，comfyui会让pos和neg分开推理，这个就是minimum_memory。也就是samplers.py里面的calc_cond_batch
+    comfy.model_management.load_models_gpu([model] + models, memory_required=memory_required, minimum_memory_required=minimum_memory_required) # 如果有额外的网络，需要在这里在load一下
     real_model = model.model
 
     return real_model, conds, models

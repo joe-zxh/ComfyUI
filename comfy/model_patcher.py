@@ -29,6 +29,7 @@ import comfy.float
 import comfy.model_management
 import comfy.lora
 from comfy.comfy_types import UnetWrapperFunction
+from comfy.model_base import BaseModel
 
 def string_to_seed(data):
     crc = 0xFFFFFFFF
@@ -120,8 +121,8 @@ def get_key_weight(model, key):
     return weight, set_func, convert_func
 
 class ModelPatcher:
-    def __init__(self, model, load_device, offload_device, size=0, weight_inplace_update=False):
-        self.size = size
+    def __init__(self, model: BaseModel, load_device, offload_device, size=0, weight_inplace_update=False):
+        self.size = size # self.model(nn.Module)占用的内存大小或者显存大小
         self.model = model
         if not hasattr(self.model, 'device'):
             logging.debug("Model doesn't have a device attribute.")
@@ -129,8 +130,8 @@ class ModelPatcher:
         elif self.model.device is None:
             self.model.device = offload_device
 
-        self.patches = {}
-        self.backup = {}
+        self.patches = {} # key: 就是state dict中的key，value: 是一个数组，可以有多个patch，格式是: (strength_patch, patches[k], strength_model, offset, function) # 强度，key
+        self.backup = {} # 记录patch之前的原始权重值，用于后续unpatch时的恢复
         self.object_patches = {}
         self.object_patches_backup = {}
         self.model_options = {"transformer_options":{}}
@@ -138,29 +139,33 @@ class ModelPatcher:
         self.load_device = load_device
         self.offload_device = offload_device
         self.weight_inplace_update = weight_inplace_update
-        self.patches_uuid = uuid.uuid4()
+        self.patches_uuid = uuid.uuid4() # 每patch一次，都要重新生成一下uuid
 
         if not hasattr(self.model, 'model_loaded_weight_memory'):
-            self.model.model_loaded_weight_memory = 0
+            self.model.model_loaded_weight_memory = 0 # 记录当前已经加载到device的模块所占用的空间
 
         if not hasattr(self.model, 'lowvram_patch_counter'):
-            self.model.lowvram_patch_counter = 0
+            self.model.lowvram_patch_counter = 0 # 记录lowvram下的patch数量
 
         if not hasattr(self.model, 'model_lowvram'):
-            self.model.model_lowvram = False
+            self.model.model_lowvram = False # 是否存在有部分模块在lowvram状态下
 
+    # 模型占用的空间大小
     def model_size(self):
         if self.size > 0:
             return self.size
         self.size = comfy.model_management.module_size(self.model)
         return self.size
 
+     # 已加载的模块的空间大小
     def loaded_size(self):
         return self.model.model_loaded_weight_memory
 
+    # lowvram下的patch数量
     def lowvram_patch_counter(self):
         return self.model.lowvram_patch_counter
 
+    # model(nn.Module)是引用的，patch是深拷贝
     def clone(self):
         n = ModelPatcher(self.model, self.load_device, self.offload_device, self.size, weight_inplace_update=self.weight_inplace_update)
         n.patches = {}
@@ -179,6 +184,7 @@ class ModelPatcher:
             return True
         return False
 
+    # 如果patches_uuid一样，那么说明ModelPatch补丁后的权重也是一样的
     def clone_has_same_weights(self, clone):
         if not self.is_clone(clone):
             return False
@@ -192,6 +198,7 @@ class ModelPatcher:
             else:
                 return True
 
+    # 推理所需要的空间大小（注意和加载所需要的空间大小区分）
     def memory_required(self, input_shape):
         return self.model.memory_required(input_shape=input_shape)
 
@@ -288,6 +295,7 @@ class ModelPatcher:
         if hasattr(self.model, "get_dtype"):
             return self.model.get_dtype()
 
+    # 添加补丁
     def add_patches(self, patches, strength_patch=1.0, strength_model=1.0):
         p = set()
         model_sd = self.model.state_dict()
@@ -304,7 +312,7 @@ class ModelPatcher:
 
             if key in model_sd:
                 p.add(k)
-                current_patches = self.patches.get(key, [])
+                current_patches = self.patches.get(key, []) # 每个key可能有多个patch，所以要用list来存
                 current_patches.append((strength_patch, patches[k], strength_model, offset, function))
                 self.patches[key] = current_patches
 
@@ -340,6 +348,7 @@ class ModelPatcher:
                     sd.pop(k)
         return sd
 
+    # 给权重打补丁，并放到device上
     def patch_weight_to_device(self, key, device_to=None, inplace_update=False):
         if key not in self.patches:
             return
@@ -357,16 +366,19 @@ class ModelPatcher:
         if convert_func is not None:
             temp_weight = convert_func(temp_weight, inplace=True)
 
-        out_weight = comfy.lora.calculate_weight(self.patches[key], temp_weight, key)
+        out_weight = comfy.lora.calculate_weight(self.patches[key], temp_weight, key) # 计算补丁后的权重
         if set_func is None:
             out_weight = comfy.float.stochastic_rounding(out_weight, weight.dtype, seed=string_to_seed(key))
+            # 用补丁后的权重更新当前的权重
             if inplace_update:
                 comfy.utils.copy_to_param(self.model, key, out_weight)
             else:
                 comfy.utils.set_attr_param(self.model, key, out_weight)
         else:
             set_func(out_weight, inplace_update=inplace_update, seed=string_to_seed(key))
+        a = 1
 
+    # 返回需要加载的模块list：(需要占用的空间大小，模块名字，模块，参数名字(即weight、bias))
     def _load_list(self):
         loading = []
         for n, m in self.model.named_modules():
@@ -376,20 +388,23 @@ class ModelPatcher:
                 params.append(name)
             for name, param in m.named_parameters(recurse=True):
                 if name not in params:
-                    skip = True # skip random weights in non leaf modules
+                    skip = True # skip random weights in non leaf modules # zxh: 主要看当前m是不是叶子module，如果是，那么是需要加载的权重
                     break
             if not skip and (hasattr(m, "comfy_cast_weights") or len(params) > 0):
                 loading.append((comfy.model_management.module_size(m), n, m, params))
         return loading
 
+    # lowvram_model_memory: load之前可用的最大空间
     def load(self, device_to=None, lowvram_model_memory=0, force_patch_weights=False, full_load=False):
-        mem_counter = 0
-        patch_counter = 0
+        if hasattr(self.model, "diffusion_model"):
+            a = 1
+        mem_counter = 0 # 当前加载的空间
+        patch_counter = 0 # lowvram下的patch数量
         lowvram_counter = 0
         loading = self._load_list()
 
-        load_completely = []
-        loading.sort(reverse=True)
+        load_completely = [] # 存放可以完全加载到device_to的模块列表
+        loading.sort(reverse=True) # 从空间占用大的模块开始加载
         for x in loading:
             n = x[1]
             m = x[2]
@@ -399,7 +414,7 @@ class ModelPatcher:
             lowvram_weight = False
 
             if not full_load and hasattr(m, "comfy_cast_weights"):
-                if mem_counter + module_mem >= lowvram_model_memory:
+                if mem_counter + module_mem >= lowvram_model_memory: # 如果所需空间不够，那么当前的模块要以lowvram的方式加载
                     lowvram_weight = True
                     lowvram_counter += 1
                     if hasattr(m, "prev_comfy_cast_weights"): #Already lowvramed
@@ -445,7 +460,7 @@ class ModelPatcher:
             for param in params:
                 self.patch_weight_to_device("{}.{}".format(n, param), device_to=device_to)
 
-            logging.debug("lowvram: loaded module regularly {} {}".format(n, m))
+            # logging.debug("lowvram: loaded module regularly {} {}".format(n, m))
             m.comfy_patched_weights = True
 
         for x in load_completely:
@@ -465,6 +480,7 @@ class ModelPatcher:
         self.model.device = device_to
         self.model.model_loaded_weight_memory = mem_counter
 
+    # 把权重load到device_to的硬件上，同时，内部调用load方法，然后调用patch_weight_to_device计算实际计算时使用的权重。
     def patch_model(self, device_to=None, lowvram_model_memory=0, load_weights=True, force_patch_weights=False):
         for k in self.object_patches:
             old = comfy.utils.set_attr(self.model, k, self.object_patches[k])
@@ -480,6 +496,7 @@ class ModelPatcher:
             self.load(device_to, lowvram_model_memory=lowvram_model_memory, force_patch_weights=force_patch_weights, full_load=full_load)
         return self.model
 
+    # 把权重移动到device_to上，并从backup恢复原始的权重
     def unpatch_model(self, device_to=None, unpatch_weights=True):
         if unpatch_weights:
             if self.model.model_lowvram:
@@ -582,7 +599,3 @@ class ModelPatcher:
 
     def current_loaded_device(self):
         return self.model.device
-
-    def calculate_weight(self, patches, weight, key, intermediate_dtype=torch.float32):
-        print("WARNING the ModelPatcher.calculate_weight function is deprecated, please use: comfy.lora.calculate_weight instead")
-        return comfy.lora.calculate_weight(patches, weight, key, intermediate_dtype=intermediate_dtype)

@@ -90,7 +90,8 @@ def make_beta_schedule(schedule, n_timestep, linear_start=1e-4, linear_end=2e-2,
     if schedule == "linear":
         betas = (
                 torch.linspace(linear_start ** 0.5, linear_end ** 0.5, n_timestep, dtype=torch.float64) ** 2
-        )
+        ) # 不知道为什么这里要开根号然后再平方。难道是对标准差做插值？但这里好像也不是标准差？
+
 
     elif schedule == "cosine":
         timesteps = (

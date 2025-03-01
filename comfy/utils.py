@@ -55,6 +55,7 @@ def save_torch_file(sd, ckpt, metadata=None):
     else:
         safetensors.torch.save_file(sd, ckpt)
 
+# 计算state dict里面有多少个参数
 def calculate_parameters(sd, prefix=""):
     params = 0
     for k in sd.keys():
@@ -63,6 +64,7 @@ def calculate_parameters(sd, prefix=""):
             params += w.nelement()
     return params
 
+# state dict里面参数类型最多的那个数据类型，作为这个state dict的dtype
 def weight_dtype(sd, prefix=""):
     dtypes = {}
     for k in sd.keys():
@@ -216,7 +218,7 @@ UNET_MAP_BASIC = {
     ("time_embed.2.bias", "time_embedding.linear_2.bias")
 }
 
-def unet_to_diffusers(unet_config):
+def unet_to_diffusers(unet_config): # 返回key的映射controlnet_data，key: 当前unet中的key，value: diffusers中的key
     if "num_res_blocks" not in unet_config:
         return {}
     num_res_blocks = unet_config["num_res_blocks"]
@@ -606,6 +608,7 @@ def set_attr(obj, attr, value):
 def set_attr_param(obj, attr, value):
     return set_attr(obj, attr, torch.nn.Parameter(value, requires_grad=False))
 
+# inplace的方式，会进行copy，就不会收到value被外部修改的影响；copy_to_param和setattr_param的显存应该是类似的，只是value最终是copy还是引用的区别。
 def copy_to_param(obj, attr, value):
     # inplace update tensor instead of replacing it
     attrs = attr.split(".")

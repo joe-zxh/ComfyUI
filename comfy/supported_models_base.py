@@ -28,7 +28,7 @@ class ClipTarget:
         self.params = {}
 
 class BASE:
-    unet_config = {}
+    unet_config = {} # 区分不同网络结构的特征，在matches函数中会用到：如果key不存在 或者 key存在，但value不对，那么就没有匹配上
     unet_extra_config = {
         "num_heads": -1,
         "num_head_channels": 64,

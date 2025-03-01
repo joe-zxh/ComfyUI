@@ -9,7 +9,7 @@ from collections.abc import Collection
 
 supported_pt_extensions: set[str] = {'.ckpt', '.pt', '.bin', '.pth', '.safetensors', '.pkl', '.sft'}
 
-folder_names_and_paths: dict[str, tuple[list[str], set[str]]] = {}
+folder_names_and_paths: dict[str, tuple[list[str], set[str]]] = {} # key: 名字；value: 是一个数组，第0个元素是具体的路径，是个列表，可以支持多个路径；第1个元素是支持的文件类型
 
 base_path = os.path.dirname(os.path.realpath(__file__))
 models_dir = os.path.join(base_path, "models")

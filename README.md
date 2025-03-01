@@ -1,5 +1,16 @@
 <div align="center">
 
+# ComfyUI代码注释版
+
+* 这是我B站视频分享对应的代码注释版，B站链接：https://www.bilibili.com/video/BV1nY6xYmEcP
+* 注释版代码基于ComfyUI v0.3.6
+* B站视频对应的讲义放在docs_azou目录下
+* 仅用于学习，不可用于商业用途，转载请注明出处：
+    * github: https://github.com/joe-zxh/ComfyUI
+    * B站: https://www.bilibili.com/video/BV1nY6xYmEcP
+
+
+
 # ComfyUI
 **The most powerful and modular diffusion model GUI and backend.**
 

@@ -323,11 +323,12 @@ def model_config_from_unet_config(unet_config, state_dict=None):
     logging.error("no match {}".format(unet_config))
     return None
 
+# 先猜测unet的配置，再根据配置猜测整个模型配置
 def model_config_from_unet(state_dict, unet_key_prefix, use_base_if_no_match=False):
-    unet_config = detect_unet_config(state_dict, unet_key_prefix)
+    unet_config = detect_unet_config(state_dict, unet_key_prefix) # 简化版的config(dict类型的)
     if unet_config is None:
         return None
-    model_config = model_config_from_unet_config(unet_config, state_dict)
+    model_config = model_config_from_unet_config(unet_config, state_dict) # 完整版的config(comfy.supported_models_base.BASE类型的)
     if model_config is None and use_base_if_no_match:
         model_config = comfy.supported_models_base.BASE(unet_config)
 
@@ -340,6 +341,7 @@ def model_config_from_unet(state_dict, unet_key_prefix, use_base_if_no_match=Fal
 
     return model_config
 
+# 通过检查state_dict中的键来检测UNet配置，取数量多的那个作为prefix
 def unet_prefix_from_state_dict(state_dict):
     candidates = ["model.diffusion_model.", #ldm/sgm models
                   "model.model.", #audio models

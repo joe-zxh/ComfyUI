@@ -32,7 +32,7 @@ LORA_CLIP_MAP = {
     "self_attn.out_proj": "self_attn_out_proj",
 }
 
-
+# 本质上就是对to_load里面的所有key，一个个去查lora state_dict里面有没有某种类型的key，如果有就加载，没有就继续。为什么不反过来？通过lora里面的key来找？
 def load_lora(lora, to_load):
     patch_dict = {}
     loaded_keys = set()
@@ -58,7 +58,7 @@ def load_lora(lora, to_load):
             except:
                 pass
 
-        regular_lora = "{}.lora_up.weight".format(x)
+        regular_lora = "{}.lora_up.weight".format(x) # 2个权重，1个A，1个B。用的时候乘起来，然后再加原本的权重
         diffusers_lora = "{}_lora.up.weight".format(x)
         diffusers2_lora = "{}.lora_B.weight".format(x)
         diffusers3_lora = "{}.lora.up.weight".format(x)
@@ -96,7 +96,7 @@ def load_lora(lora, to_load):
             if mid_name is not None and mid_name in lora.keys():
                 mid = lora[mid_name]
                 loaded_keys.add(mid_name)
-            patch_dict[to_load[x]] = ("lora", (lora[A_name], lora[B_name], alpha, mid, dora_scale, reshape))
+            patch_dict[to_load[x]] = ("lora", (lora[A_name], lora[B_name], alpha, mid, dora_scale, reshape)) # zxh: 断点
             loaded_keys.add(A_name)
             loaded_keys.add(B_name)
 
@@ -297,11 +297,13 @@ def model_lora_keys_clip(model, key_map={}):
 
     return key_map
 
-def model_lora_keys_unet(model, key_map={}):
+# 根据model来预测可能有的lora key，更新的结果是key_map
+# key_map: key: lora里面可能的key；value，对应unet、clip的nn.Module里面的key
+def model_lora_keys_unet(model: torch.nn.Module, key_map={}): # model是model_base.py里面的BaseModel
     sd = model.state_dict()
     sdk = sd.keys()
 
-    for k in sdk:
+    for k in sdk: # 构造kohya的lora对应的key
         if k.startswith("diffusion_model."):
             if k.endswith(".weight"):
                 key_lora = k[len("diffusion_model."):-len(".weight")].replace(".", "_")
@@ -312,7 +314,7 @@ def model_lora_keys_unet(model, key_map={}):
                 key_map["{}".format(k)] = k #generic lora format for not .weight without any weird key names
 
     diffusers_keys = comfy.utils.unet_to_diffusers(model.model_config.unet_config)
-    for k in diffusers_keys:
+    for k in diffusers_keys: # 构造diffusers的lora对应的key
         if k.endswith(".weight"):
             unet_key = "diffusion_model.{}".format(diffusers_keys[k])
             key_lora = k[:-len(".weight")].replace(".", "_")
@@ -432,7 +434,7 @@ def pad_tensor_to_shape(tensor: torch.Tensor, new_shape: list[int]) -> torch.Ten
 def calculate_weight(patches, weight, key, intermediate_dtype=torch.float32):
     for p in patches:
         strength = p[0]
-        v = p[1]
+        v = p[1] # alpha、矩阵A、矩阵B
         strength_model = p[2]
         offset = p[3]
         function = p[4]
@@ -481,7 +483,7 @@ def calculate_weight(patches, weight, key, intermediate_dtype=torch.float32):
                 weight = pad_tensor_to_shape(weight, reshape)
 
             if v[2] is not None:
-                alpha = v[2] / mat2.shape[0]
+                alpha = v[2] / mat2.shape[0] # v[2]=alpha, mat2.shape[0]=mat1.shape[1]=dim, 真正的scale = alpha / dim
             else:
                 alpha = 1.0
 

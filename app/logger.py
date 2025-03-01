@@ -46,12 +46,15 @@ def get_logs():
 
 
 def on_flush(callback):
+    return
     if stdout_interceptor is not None:
         stdout_interceptor.on_flush(callback)
     if stderr_interceptor is not None:
         stderr_interceptor.on_flush(callback)
 
+# 因为是一个比较完备的工程项目，comfyui的log会延迟打印，这里我略食小鸡
 def setup_logger(log_level: str = 'INFO', capacity: int = 300):
+    # return
     global logs
     if logs:
         return
@@ -61,13 +64,16 @@ def setup_logger(log_level: str = 'INFO', capacity: int = 300):
 
     global stdout_interceptor
     global stderr_interceptor
-    stdout_interceptor = sys.stdout = LogInterceptor(sys.stdout)
-    stderr_interceptor = sys.stderr = LogInterceptor(sys.stderr)
+    # stdout_interceptor = sys.stdout = LogInterceptor(sys.stdout)
+    # stderr_interceptor = sys.stderr = LogInterceptor(sys.stderr)
+    stdout_interceptor = sys.stdout
+    stderr_interceptor = sys.stderr
 
     # Setup default global logger
     logger = logging.getLogger()
     logger.setLevel(log_level)
 
     stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(logging.Formatter("%(message)s"))
+    # stream_handler.setFormatter(logging.Formatter("%(message)s"))
+    stream_handler.setFormatter(logging.Formatter("%(asctime)s - %(thread)d - [%(levelname)s](%(filename)s:%(lineno)d) %(message)s")) # 这里打印文件名和行号，方便后续调试
     logger.addHandler(stream_handler)

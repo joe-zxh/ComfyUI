@@ -1,3 +1,5 @@
+
+# 就是去看prompt里面的值是不是一个link，指向上一个需要执行完的节点。
 def is_link(obj):
     if not isinstance(obj, list):
         return False

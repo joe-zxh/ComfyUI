@@ -22,17 +22,20 @@ def rescale_zero_terminal_snr_sigmas(sigmas):
     return ((1 - alphas_bar) / alphas_bar) ** 0.5
 
 class EPS:
+    # 修改输入的noise（乘一个倍率因子）
     def calculate_input(self, sigma, noise):
         sigma = sigma.view(sigma.shape[:1] + (1,) * (noise.ndim - 1))
-        return noise / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
+        return noise / (sigma ** 2 + self.sigma_data ** 2) ** 0.5 # 对应的就是EDM里面的那个input scaling。对于ModelSamplingDiscrete来说，sigma_data是1.0
 
-    def calculate_denoised(self, sigma, model_output, model_input):
+    # 计算干净的图
+    def calculate_denoised(self, sigma, model_output, model_input): # model_input就是x_t
         sigma = sigma.view(sigma.shape[:1] + (1,) * (model_output.ndim - 1))
-        return model_input - model_output * sigma
+        return model_input - model_output * sigma # noise = model_output * simga(EDM里面的output scaling); x_t - noise = 干净的图片。
 
+    # 这个就是做重参数化的。noise是均值为0，方差为1的。现在要转成均值为均值是s(1)≈0，方差为sigma(1)的。所以这里是*方差。但不知道为什么max_denoise=True的时候，是乘 1+sigma^2
     def noise_scaling(self, sigma, noise, latent_image, max_denoise=False):
         if max_denoise:
-            noise = noise * torch.sqrt(1.0 + sigma ** 2.0)
+            noise = noise * torch.sqrt(1.0 + sigma ** 2.0) # 这个不知道是什么
         else:
             noise = noise * sigma
 
@@ -66,6 +69,7 @@ class CONST:
     def inverse_noise_scaling(self, sigma, latent):
         return latent / (1.0 - sigma)
 
+# 其实对应的就是DDPM的采样
 class ModelSamplingDiscrete(torch.nn.Module):
     def __init__(self, model_config=None, zsnr=None):
         super().__init__()
@@ -87,7 +91,7 @@ class ModelSamplingDiscrete(torch.nn.Module):
         self.sigma_data = 1.0
 
     def _register_schedule(self, given_betas=None, beta_schedule="linear", timesteps=1000,
-                          linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3, zsnr=False):
+                          linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3, zsnr=False): # linear_start对应的就是DDPM第4章里面的beta1，linear_end对应的就是betaT
         if given_betas is not None:
             betas = given_betas
         else:
@@ -104,7 +108,7 @@ class ModelSamplingDiscrete(torch.nn.Module):
         # self.register_buffer('alphas_cumprod', torch.tensor(alphas_cumprod, dtype=torch.float32))
         # self.register_buffer('alphas_cumprod_prev', torch.tensor(alphas_cumprod_prev, dtype=torch.float32))
 
-        sigmas = ((1 - alphas_cumprod) / alphas_cumprod) ** 0.5
+        sigmas = ((1 - alphas_cumprod) / alphas_cumprod) ** 0.5 # 出处？
         if zsnr:
             sigmas = rescale_zero_terminal_snr_sigmas(sigmas)
 
@@ -122,11 +126,13 @@ class ModelSamplingDiscrete(torch.nn.Module):
     def sigma_max(self):
         return self.sigmas[-1]
 
+    # sigma = func(t); t = func^-1(sigma)
     def timestep(self, sigma):
         log_sigma = sigma.log()
         dists = log_sigma.to(self.log_sigmas.device) - self.log_sigmas[:, None]
         return dists.abs().argmin(dim=0).view(sigma.shape).to(sigma.device)
 
+    # 这个是当timestep不是整数的时候，用线性插值计算对应的sigma
     def sigma(self, timestep):
         t = torch.clamp(timestep.float().to(self.log_sigmas.device), min=0, max=(len(self.sigmas) - 1))
         low_idx = t.floor().long()

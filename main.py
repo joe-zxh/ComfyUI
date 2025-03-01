@@ -5,13 +5,15 @@ import os
 import importlib.util
 import folder_paths
 import time
-from comfy.cli_args import args
+from comfy.cli_args import args # args的定义可以自行看里面的注释，后续用到的时候会详细注释一下。
 from app.logger import setup_logger
 
 
-setup_logger(log_level=args.verbose)
+setup_logger(log_level=args.verbose) # 设置日志
 
 
+# 执行一些预执行的操作，这个是在正式加载节点执行进行的，理论上可以做一些hook操作
+# 预执行的操作是定义在prestartup_script.py里面的。如果不存在这个文件，则跳过
 def execute_prestartup_script():
     def execute_script(script_path):
         module_name = os.path.splitext(script_path)[0]
@@ -90,6 +92,7 @@ import comfy.utils
 
 import execution
 import server
+from server import PromptServer
 from server import BinaryEventTypes
 import nodes
 import comfy.model_management
@@ -105,7 +108,8 @@ def cuda_malloc_warning():
         if cuda_malloc_warning:
             logging.warning("\nWARNING: this card most likely does not support cuda-malloc, if you get \"CUDA error\" please run ComfyUI with: --disable-cuda-malloc\n")
 
-def prompt_worker(q, server):
+# prompt服务器的具体工作
+def prompt_worker(q: execution.PromptQueue, server: PromptServer):
     e = execution.PromptExecutor(server, lru_size=args.cache_lru)
     last_gc_collect = 0
     need_gc = False
@@ -123,14 +127,36 @@ def prompt_worker(q, server):
             prompt_id = item[1]
             server.last_prompt_id = prompt_id
 
-            e.execute(item[2], prompt_id, item[3], item[4])
+            import uuid
+            # while True:
+            import random
+            from copy import deepcopy
+            for i in range(1):
+                t0 = time.perf_counter()
+                # try:
+                #     # item[2]['73']['inputs']['seed'] = random.randint(0, 999999999999)
+                #     del item[2]['1']['is_changed']
+                #     del item[2]['149']['is_changed']
+                # except Exception as eee:
+                #     pass
+                # import json
+                # json.dump(item[2], open(f"ttt.json", "w"), indent=4)
+                # e.execute(ppp2, str(uuid.uuid4()), item[3], item[4])
+                # e.caches.all[0].cache = {}
+                # e.caches.all[1].cache = {}
+                # e.caches.all[2].cache = {}
+                e.execute(item[2], str(uuid.uuid4()), item[3], item[4]) # 一个任务具体的执行入口
+                time_used = time.perf_counter() - t0
+                print(f"Execution time: {time_used:.2f} seconds")
+                a = 1
+
             need_gc = True
             q.task_done(item_id,
                         e.history_result,
                         status=execution.PromptQueue.ExecutionStatus(
                             status_str='success' if e.success else 'error',
                             completed=e.success,
-                            messages=e.status_messages))
+                            messages=e.status_messages)) # 任务完成返回前端
             if server.client_id is not None:
                 server.send_sync("executing", { "node": None, "prompt_id": prompt_id }, server.client_id)
 
@@ -141,6 +167,7 @@ def prompt_worker(q, server):
         flags = q.get_flags()
         free_memory = flags.get("free_memory", False)
 
+        # 进行一些模型释放的操作
         if flags.get("unload_models", free_memory):
             comfy.model_management.unload_all_models()
             need_gc = True
@@ -200,8 +227,8 @@ if __name__ == "__main__":
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    server = server.PromptServer(loop)
-    q = execution.PromptQueue(server)
+    server = server.PromptServer(loop) # 和前端交互，用来接收前端prompt的服务器
+    q = execution.PromptQueue(server) # prompt服务器接收到的prompt会放到队列PromptQueue里面
 
     extra_model_paths_config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "extra_model_paths.yaml")
     if os.path.isfile(extra_model_paths_config_path):
@@ -211,15 +238,16 @@ if __name__ == "__main__":
         for config_path in itertools.chain(*args.extra_model_paths_config):
             utils.extra_config.load_extra_path_config(config_path)
 
-    nodes.init_extra_nodes(init_custom_nodes=not args.disable_all_custom_nodes)
+    nodes.init_extra_nodes(init_custom_nodes=not args.disable_all_custom_nodes) # 初始化自定义节点
 
     cuda_malloc_warning()
 
     server.add_routes()
     hijack_progress(server)
 
-    threading.Thread(target=prompt_worker, daemon=True, args=(q, server,)).start()
+    threading.Thread(target=prompt_worker, daemon=True, args=(q, server,)).start() # 创建真正的服务器线程
 
+    # 后面的代码就不是很重要了，跳过
     if args.output_directory:
         output_dir = os.path.abspath(args.output_directory)
         logging.info(f"Setting output directory to: {output_dir}")

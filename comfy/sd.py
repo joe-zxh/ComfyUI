@@ -38,17 +38,19 @@ import comfy.taesd.taesd
 
 import comfy.ldm.flux.redux
 
-def load_lora_for_models(model, clip, lora, strength_model, strength_clip):
-    key_map = {}
+import comfy.supported_models_base as supported_models_base
+
+def load_lora_for_models(model: comfy.model_patcher.ModelPatcher, clip, lora, strength_model, strength_clip):
+    key_map = {} # key: 各种各样的lora的key, value: 对应当前model中的key
     if model is not None:
         key_map = comfy.lora.model_lora_keys_unet(model.model, key_map)
     if clip is not None:
         key_map = comfy.lora.model_lora_keys_clip(clip.cond_stage_model, key_map)
 
     lora = comfy.lora_convert.convert_lora(lora)
-    loaded = comfy.lora.load_lora(lora, key_map)
+    loaded = comfy.lora.load_lora(lora, key_map) # 获得能load到的lora key值，alpha值，A、B的权重值
     if model is not None:
-        new_modelpatcher = model.clone()
+        new_modelpatcher: comfy.model_patcher.ModelPatcher = model.clone()
         k = new_modelpatcher.add_patches(loaded, strength_model)
     else:
         k = ()
@@ -635,7 +637,7 @@ def load_checkpoint(config_path=None, ckpt_path=None, output_vae=True, output_cl
     return (model, clip, vae)
 
 def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, output_clipvision=False, embedding_directory=None, output_model=True, model_options={}, te_model_options={}):
-    sd = comfy.utils.load_torch_file(ckpt_path)
+    sd = comfy.utils.load_torch_file(ckpt_path) # state dict
     out = load_state_dict_guess_config(sd, output_vae, output_clip, output_clipvision, embedding_directory, output_model, model_options, te_model_options=te_model_options)
     if out is None:
         raise RuntimeError("ERROR: Could not detect model type of: {}".format(ckpt_path))
@@ -649,11 +651,11 @@ def load_state_dict_guess_config(sd, output_vae=True, output_clip=True, output_c
     model_patcher = None
 
     diffusion_model_prefix = model_detection.unet_prefix_from_state_dict(sd)
-    parameters = comfy.utils.calculate_parameters(sd, diffusion_model_prefix)
+    parameters = comfy.utils.calculate_parameters(sd, diffusion_model_prefix) # 可以通过参数量来预测内存或显存的占用
     weight_dtype = comfy.utils.weight_dtype(sd, diffusion_model_prefix)
     load_device = model_management.get_torch_device()
 
-    model_config = model_detection.model_config_from_unet(sd, diffusion_model_prefix)
+    model_config : supported_models_base.BASE = model_detection.model_config_from_unet(sd, diffusion_model_prefix)
     if model_config is None:
         return None
 
@@ -665,7 +667,7 @@ def load_state_dict_guess_config(sd, output_vae=True, output_clip=True, output_c
     unet_dtype = model_options.get("dtype", model_options.get("weight_dtype", None))
 
     if unet_dtype is None:
-        unet_dtype = model_management.unet_dtype(model_params=parameters, supported_dtypes=unet_weight_dtype)
+        unet_dtype = model_management.unet_dtype(model_params=parameters, supported_dtypes=unet_weight_dtype) # 让model_management来决定使用哪种数据类型
 
     manual_cast_dtype = model_management.unet_manual_cast(unet_dtype, load_device, model_config.supported_inference_dtypes)
     model_config.set_inference_dtype(unet_dtype, manual_cast_dtype)
@@ -677,7 +679,7 @@ def load_state_dict_guess_config(sd, output_vae=True, output_clip=True, output_c
     if output_model:
         inital_load_device = model_management.unet_inital_load_device(parameters, unet_dtype)
         model = model_config.get_model(sd, diffusion_model_prefix, device=inital_load_device)
-        model.load_model_weights(sd, diffusion_model_prefix)
+        model.load_model_weights(sd, diffusion_model_prefix) # 真正的加载权重了
 
     if output_vae:
         vae_sd = comfy.utils.state_dict_prefix_replace(sd, {k: "" for k in model_config.vae_key_prefix}, filter_keys=True)
