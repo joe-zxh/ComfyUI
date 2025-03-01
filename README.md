@@ -1,4 +1,3 @@
-<div align="center">
 
 # ComfyUI代码注释版
 
@@ -10,7 +9,7 @@
     * B站: https://www.bilibili.com/video/BV1nY6xYmEcP
 
 
-
+<div align="center">
 # ComfyUI
 **The most powerful and modular diffusion model GUI and backend.**
 
