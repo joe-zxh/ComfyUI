@@ -389,7 +389,6 @@ try:
 except:
     logging.warning("Could not pick default device.")
 
-current_loaded_models : List[LoadedModel] = [] # 存放加载到GPU的模型，每个元素是一个LoadedModel对象
 
 # 获得一个nn.Module占用的空间大小
 def module_size(module: torch.nn.Module):
@@ -492,6 +491,8 @@ class LoadedModel:
     def is_dead(self):
         return self.real_model() is not None and self.model is None
 
+
+current_loaded_models : List[LoadedModel] = [] # 存放加载到GPU的模型，每个元素是一个LoadedModel对象
 
 # 尽量榨干extra_memory来加载模型
 def use_more_memory(extra_memory, loaded_models, device):
