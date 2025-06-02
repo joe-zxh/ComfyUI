@@ -1,7 +1,5 @@
 import torch
 from PIL import Image
-import struct
-import numpy as np
 from comfy.cli_args import args, LatentPreviewMethod
 from comfy.taesd.taesd import TAESD
 import comfy.model_management
@@ -14,7 +12,10 @@ MAX_PREVIEW_RESOLUTION = args.preview_size
 def preview_to_image(latent_image):
         latents_ubyte = (((latent_image + 1.0) / 2.0).clamp(0, 1)  # change scale from -1..1 to 0..1
                             .mul(0xFF)  # to 0..255
-                            ).to(device="cpu", dtype=torch.uint8, non_blocking=comfy.model_management.device_supports_non_blocking(latent_image.device))
+                            )
+        if comfy.model_management.directml_enabled:
+                latents_ubyte = latents_ubyte.to(dtype=torch.uint8)
+        latents_ubyte = latents_ubyte.to(device="cpu", dtype=torch.uint8, non_blocking=comfy.model_management.device_supports_non_blocking(latent_image.device))
 
         return Image.fromarray(latents_ubyte.numpy())
 

@@ -36,6 +36,10 @@ import comfy.cldm.mmdit
 import comfy.ldm.hydit.controlnet
 import comfy.ldm.flux.controlnet
 import comfy.cldm.dit_embedder
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from comfy.hooks import HookGroup
+
 
 def broadcast_image_to(tensor, target_batch_size, batched_number):
     current_batch_size = tensor.shape[0]
@@ -78,6 +82,7 @@ class ControlBase:
         self.concat_mask = False
         self.extra_concat_orig = []
         self.extra_concat = None
+        self.extra_hooks: HookGroup = None
         self.preprocess_image = lambda a: a
 
     def set_cond_hint(self, cond_hint, strength=1.0, timestep_percent_range=(0.0, 1.0), vae=None, extra_concat=[]):
@@ -116,6 +121,14 @@ class ControlBase:
             out += self.previous_controlnet.get_models()
         return out
 
+    def get_extra_hooks(self):
+        out = []
+        if self.extra_hooks is not None:
+            out.append(self.extra_hooks)
+        if self.previous_controlnet is not None:
+            out += self.previous_controlnet.get_extra_hooks()
+        return out
+
     def copy_to(self, c):
         c.cond_hint_original = self.cond_hint_original
         c.strength = self.strength
@@ -130,6 +143,7 @@ class ControlBase:
         c.strength_type = self.strength_type
         c.concat_mask = self.concat_mask
         c.extra_concat_orig = self.extra_concat_orig.copy()
+        c.extra_hooks = self.extra_hooks.clone() if self.extra_hooks else None
         c.preprocess_image = self.preprocess_image
 
     def inference_memory_requirements(self, dtype):
@@ -200,10 +214,10 @@ class ControlNet(ControlBase):
         self.concat_mask = concat_mask
         self.preprocess_image = preprocess_image
 
-    def get_control(self, x_noisy, t, cond, batched_number):
+    def get_control(self, x_noisy, t, cond, batched_number, transformer_options):
         control_prev = None
         if self.previous_controlnet is not None:
-            control_prev = self.previous_controlnet.get_control(x_noisy, t, cond, batched_number)
+            control_prev = self.previous_controlnet.get_control(x_noisy, t, cond, batched_number, transformer_options)
 
         if self.timestep_range is not None:
             if t[0] > self.timestep_range[0] or t[0] < self.timestep_range[1]:
@@ -283,7 +297,6 @@ class ControlLoraOps:
     class Linear(torch.nn.Module, comfy.ops.CastWeightBiasOp):
         def __init__(self, in_features: int, out_features: int, bias: bool = True,
                     device=None, dtype=None) -> None:
-            factory_kwargs = {'device': device, 'dtype': dtype}
             super().__init__()
             self.in_features = in_features
             self.out_features = out_features
@@ -368,7 +381,6 @@ class ControlLora(ControlNet):
         self.control_model.to(comfy.model_management.get_torch_device())
         diffusion_model = model.diffusion_model
         sd = diffusion_model.state_dict()
-        cm = self.control_model.state_dict()
 
         for k in sd:
             weight = sd[k]
@@ -406,10 +418,7 @@ def controlnet_config(sd, model_options={}):
         weight_dtype = comfy.utils.weight_dtype(sd)
 
         supported_inference_dtypes = list(model_config.supported_inference_dtypes)
-        if weight_dtype is not None:
-            supported_inference_dtypes.append(weight_dtype)
-
-        unet_dtype = comfy.model_management.unet_dtype(model_params=-1, supported_dtypes=supported_inference_dtypes)
+        unet_dtype = comfy.model_management.unet_dtype(model_params=-1, supported_dtypes=supported_inference_dtypes, weight_dtype=weight_dtype)
 
     load_device = comfy.model_management.get_torch_device()
     manual_cast_dtype = comfy.model_management.unet_manual_cast(unet_dtype, load_device)
@@ -677,10 +686,7 @@ def load_controlnet_state_dict(state_dict, model=None, model_options={}):
         if supported_inference_dtypes is None:
             supported_inference_dtypes = [comfy.model_management.unet_dtype()]
 
-        if weight_dtype is not None:
-            supported_inference_dtypes.append(weight_dtype)
-
-        unet_dtype = comfy.model_management.unet_dtype(model_params=-1, supported_dtypes=supported_inference_dtypes)
+        unet_dtype = comfy.model_management.unet_dtype(model_params=-1, supported_dtypes=supported_inference_dtypes, weight_dtype=weight_dtype)
 
     load_device = comfy.model_management.get_torch_device()
 
@@ -730,6 +736,7 @@ def load_controlnet_state_dict(state_dict, model=None, model_options={}):
     return control
 
 def load_controlnet(ckpt_path, model=None, model_options={}):
+    model_options = model_options.copy()
     if "global_average_pooling" not in model_options:
         filename = os.path.splitext(ckpt_path)[0]
         if filename.endswith("_shuffle") or filename.endswith("_shuffle_fp16"): #TODO: smarter way of enabling global_average_pooling
@@ -758,10 +765,10 @@ class T2IAdapter(ControlBase):
         height = math.ceil(height / unshuffle_amount) * unshuffle_amount
         return width, height
 
-    def get_control(self, x_noisy, t, cond, batched_number):
+    def get_control(self, x_noisy, t, cond, batched_number, transformer_options):
         control_prev = None
         if self.previous_controlnet is not None:
-            control_prev = self.previous_controlnet.get_control(x_noisy, t, cond, batched_number)
+            control_prev = self.previous_controlnet.get_control(x_noisy, t, cond, batched_number, transformer_options)
 
         if self.timestep_range is not None:
             if t[0] > self.timestep_range[0] or t[0] < self.timestep_range[1]:
@@ -809,7 +816,7 @@ def load_t2i_adapter(t2i_data, model_options={}): #TODO: model_options
         for i in range(4):
             for j in range(2):
                 prefix_replace["adapter.body.{}.resnets.{}.".format(i, j)] = "body.{}.".format(i * 2 + j)
-            prefix_replace["adapter.body.{}.".format(i, j)] = "body.{}.".format(i * 2)
+            prefix_replace["adapter.body.{}.".format(i, )] = "body.{}.".format(i * 2)
         prefix_replace["adapter."] = ""
         t2i_data = comfy.utils.state_dict_prefix_replace(t2i_data, prefix_replace)
     keys = t2i_data.keys()

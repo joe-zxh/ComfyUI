@@ -53,7 +53,7 @@ def on_flush(callback):
         stderr_interceptor.on_flush(callback)
 
 # 因为是一个比较完备的工程项目，comfyui的log会延迟打印，这里我略食小鸡
-def setup_logger(log_level: str = 'INFO', capacity: int = 300):
+def setup_logger(log_level: str = 'INFO', capacity: int = 300, use_stdout: bool = False):
     # return
     global logs
     if logs:
@@ -76,4 +76,29 @@ def setup_logger(log_level: str = 'INFO', capacity: int = 300):
     stream_handler = logging.StreamHandler()
     # stream_handler.setFormatter(logging.Formatter("%(message)s"))
     stream_handler.setFormatter(logging.Formatter("%(asctime)s - %(thread)d - [%(levelname)s](%(filename)s:%(lineno)d) %(message)s")) # 这里打印文件名和行号，方便后续调试
+
+    if use_stdout:
+        # Only errors and critical to stderr
+        stream_handler.addFilter(lambda record: not record.levelno < logging.ERROR)
+
+        # Lesser to stdout
+        stdout_handler = logging.StreamHandler(sys.stdout)
+        stdout_handler.setFormatter(logging.Formatter("%(message)s"))
+        stdout_handler.addFilter(lambda record: record.levelno < logging.ERROR)
+        logger.addHandler(stdout_handler)
+
     logger.addHandler(stream_handler)
+
+
+STARTUP_WARNINGS = []
+
+
+def log_startup_warning(msg):
+    logging.warning(msg)
+    STARTUP_WARNINGS.append(msg)
+
+
+def print_startup_warnings():
+    for s in STARTUP_WARNINGS:
+        logging.warning(s)
+    STARTUP_WARNINGS.clear()

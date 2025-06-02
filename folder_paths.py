@@ -4,14 +4,21 @@ import os
 import time
 import mimetypes
 import logging
-from typing import Set, List, Dict, Tuple, Literal
+from typing import Literal, List
 from collections.abc import Collection
 
-supported_pt_extensions: set[str] = {'.ckpt', '.pt', '.bin', '.pth', '.safetensors', '.pkl', '.sft'}
+from comfy.cli_args import args
+
+supported_pt_extensions: set[str] = {'.ckpt', '.pt', '.pt2', '.bin', '.pth', '.safetensors', '.pkl', '.sft'}
 
 folder_names_and_paths: dict[str, tuple[list[str], set[str]]] = {} # key: 名字；value: 是一个数组，第0个元素是具体的路径，是个列表，可以支持多个路径；第1个元素是支持的文件类型
 
-base_path = os.path.dirname(os.path.realpath(__file__))
+# --base-directory - Resets all default paths configured in folder_paths with a new base path
+if args.base_directory:
+    base_path = os.path.abspath(args.base_directory)
+else:
+    base_path = os.path.dirname(os.path.realpath(__file__))
+
 models_dir = os.path.join(base_path, "models")
 folder_names_and_paths["checkpoints"] = ([os.path.join(models_dir, "checkpoints")], supported_pt_extensions)
 folder_names_and_paths["configs"] = ([os.path.join(models_dir, "configs")], [".yaml"])
@@ -39,10 +46,10 @@ folder_names_and_paths["photomaker"] = ([os.path.join(models_dir, "photomaker")]
 
 folder_names_and_paths["classifiers"] = ([os.path.join(models_dir, "classifiers")], {""})
 
-output_directory = os.path.join(os.path.dirname(os.path.realpath(__file__)), "output")
-temp_directory = os.path.join(os.path.dirname(os.path.realpath(__file__)), "temp")
-input_directory = os.path.join(os.path.dirname(os.path.realpath(__file__)), "input")
-user_directory = os.path.join(os.path.dirname(os.path.realpath(__file__)), "user")
+output_directory = os.path.join(base_path, "output")
+temp_directory = os.path.join(base_path, "temp")
+input_directory = os.path.join(base_path, "input")
+user_directory = os.path.join(base_path, "user")
 
 filename_list_cache: dict[str, tuple[list[str], dict[str, float], float]] = {}
 
@@ -58,7 +65,7 @@ class CacheHelper:
         if not self.active:
             return default
         return self.cache.get(key, default)
-    
+
     def set(self, key: str, value: tuple[list[str], dict[str, float], float]) -> None:
         if self.active:
             self.cache[key] = value
@@ -78,6 +85,7 @@ cache_helper = CacheHelper()
 
 extension_mimetypes_cache = {
     "webp" : "image",
+    "fbx" : "model",
 }
 
 def map_legacy(folder_name: str) -> str:
@@ -133,11 +141,14 @@ def get_directory_by_type(type_name: str) -> str | None:
         return get_input_directory()
     return None
 
-def filter_files_content_types(files: List[str], content_types: Literal["image", "video", "audio"]) -> List[str]:
+def filter_files_content_types(files: list[str], content_types: List[Literal["image", "video", "audio", "model"]]) -> list[str]:
     """
     Example:
         files = os.listdir(folder_paths.get_input_directory())
-        filter_files_content_types(files, ["image", "audio", "video"])
+        videos = filter_files_content_types(files, ["video"])
+
+    Note:
+        - 'model' in MIME context refers to 3D models, not files containing trained weights and parameters
     """
     global extension_mimetypes_cache
     result = []
@@ -200,10 +211,17 @@ def add_model_folder_path(folder_name: str, full_folder_path: str, is_default: b
     global folder_names_and_paths
     folder_name = map_legacy(folder_name)
     if folder_name in folder_names_and_paths:
-        if is_default:
-            folder_names_and_paths[folder_name][0].insert(0, full_folder_path)
+        paths, _exts = folder_names_and_paths[folder_name]
+        if full_folder_path in paths:
+            if is_default and paths[0] != full_folder_path:
+                # If the path to the folder is not the first in the list, move it to the beginning.
+                paths.remove(full_folder_path)
+                paths.insert(0, full_folder_path)
         else:
-            folder_names_and_paths[folder_name][0].append(full_folder_path)
+            if is_default:
+                paths.insert(0, full_folder_path)
+            else:
+                paths.append(full_folder_path)
     else:
         folder_names_and_paths[folder_name] = ([full_folder_path], set())
 
@@ -298,7 +316,7 @@ def cached_filename_list_(folder_name: str) -> tuple[list[str], dict[str, float]
     strong_cache = cache_helper.get(folder_name)
     if strong_cache is not None:
         return strong_cache
-    
+
     global filename_list_cache
     global folder_names_and_paths
     folder_name = map_legacy(folder_name)

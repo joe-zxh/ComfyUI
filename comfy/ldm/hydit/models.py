@@ -1,11 +1,9 @@
-from typing import Any
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 import comfy.ops
-from comfy.ldm.modules.diffusionmodules.mmdit import Mlp, TimestepEmbedder, PatchEmbed, RMSNorm
+from comfy.ldm.modules.diffusionmodules.mmdit import Mlp, TimestepEmbedder, PatchEmbed
 from comfy.ldm.modules.diffusionmodules.util import timestep_embedding
 from torch.utils import checkpoint
 
@@ -53,7 +51,7 @@ class HunYuanDiTBlock(nn.Module):
         if norm_type == "layer":
             norm_layer = operations.LayerNorm
         elif norm_type == "rms":
-            norm_layer = RMSNorm
+            norm_layer = operations.RMSNorm
         else:
             raise ValueError(f"Unknown norm_type: {norm_type}")
 
@@ -249,9 +247,6 @@ class HunYuanDiT(nn.Module):
             nn.SiLU(),
             operations.Linear(hidden_size * 4, hidden_size, bias=True, dtype=dtype, device=device),
         )
-
-        # Image embedding
-        num_patches = self.x_embedder.num_patches
 
         # HUnYuanDiT Blocks
         self.blocks = nn.ModuleList([
