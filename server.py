@@ -160,7 +160,7 @@ class PromptServer():
         self.custom_node_manager = CustomNodeManager()
         self.internal_routes = InternalRoutes(self)
         self.supports = ["custom_nodes_from_web"]
-        self.prompt_queue = execution.PromptQueue(self)
+        self.prompt_queue = execution.PromptQueue(self) # prompt服务器接收到的prompt会放到队列PromptQueue里面
         self.loop = loop
         self.messages = asyncio.Queue()
         self.client_session:Optional[aiohttp.ClientSession] = None
